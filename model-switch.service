@@ -1,13 +1,12 @@
 [Unit]
-Description=OpenClaw Model Switch Panel
+Description=Model Switch Panel
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 %h/.openclaw/workspace/scripts/model-switch.py
+ExecStart=/usr/bin/python3 %h/model-switch/model-switch.py
 Restart=on-failure
 RestartSec=3
-EnvironmentFile=%h/.openclaw/gateway.systemd.env
 
 [Install]
 WantedBy=default.target
