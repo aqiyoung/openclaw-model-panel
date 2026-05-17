@@ -19,7 +19,7 @@ CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
 ENV_PATH = os.path.expanduser("~/.openclaw/gateway.systemd.env")
 GATEWAY_SERVICE = "openclaw-gateway.service"
 AUTH_TOKENS = {}  # token -> expiry
-_pw = [os.environ.get("PANEL_PASSWORD", "admin123")]  # mutable container for password
+_pw = [os.environ.get("PANEL_PASSWORD", "changeme")]  # mutable container for password
 
 def load_env():
     if not os.path.exists(ENV_PATH):
@@ -33,7 +33,7 @@ def load_env():
             os.environ.setdefault(key, val)
 
 load_env()
-_pw[0] = os.environ.get("PANEL_PASSWORD", "admin123")
+_pw[0] = os.environ.get("PANEL_PASSWORD", "changeme")
 
 def make_token():
     return secrets.token_hex(32)
@@ -47,14 +47,34 @@ def check_auth(headers):
         del AUTH_TOKENS[token]
     return False
 
-PROVIDERS = {
-    "longcat": {"name": "LongCat (美团)", "test_url": "https://api.longcat.chat/openai/v1/models", "env_key": "LONGCAT_API_KEY", "proxy": False},
-    "openrouter": {"name": "OpenRouter", "test_url": "https://openrouter.ai/api/v1/models", "env_key": "OPENROUTER_API_KEY", "proxy": True},
-    "nvidia": {"name": "NVIDIA NIM", "test_url": "https://integrate.api.nvidia.com/v1/models", "env_key": "NVIDIA_API_KEY", "proxy": True},
-    "sensenova": {"name": "SenseNova (商汤)", "test_url": "https://token.sensenova.cn/v1/models", "env_key": "SENSENOVA_API_KEY", "proxy": False},
-    "xiaomimimo": {"name": "小米 MiMo", "test_url": "https://token-plan-sgp.xiaomimimo.com/v1/models", "env_key": "XIAOMI_API_KEY", "proxy": True},
-    "zai": {"name": "Z.AI (智谱)", "test_url": "https://open.bigmodel.cn/api/paas/v4/models", "env_key": "ZAI_API_KEY", "proxy": False},
-}
+def extract_env_key(api_key_template):
+    """从 ${ENV_KEY} 模板中提取环境变量名"""
+    s = api_key_template.strip()
+    if s.startswith("${") and s.endswith("}"):
+        return s[2:-1]
+    return s
+
+def load_providers():
+    """从 openclaw.json 动态读取所有提供商配置"""
+    config = load_config()
+    providers_cfg = config.get("models", {}).get("providers", {})
+    result = {}
+    for pname, pconf in providers_cfg.items():
+        base_url = pconf.get("baseUrl", "").rstrip("/")
+        api_key_tpl = pconf.get("apiKey", "")
+        env_key = extract_env_key(api_key_tpl)
+        display_name = pname
+        # 尝试从第一个模型取 name 作为显示名
+        models = pconf.get("models", [])
+        if models:
+            display_name = models[0].get("providerName") or models[0].get("name") or pname
+        test_url = f"{base_url}/models" if "/v1" in base_url else f"{base_url}/v1/models"
+        result[pname] = {
+            "name": display_name,
+            "test_url": test_url,
+            "env_key": env_key,
+        }
+    return result
 
 def load_config():
     try:
@@ -73,11 +93,12 @@ def get_provider_configs():
     providers = config.get("models", {}).get("providers", {})
     result = {}
     for pname, pconf in providers.items():
-        pdef = PROVIDERS.get(pname, {})
+        base_url = pconf.get("baseUrl", "").rstrip("/")
+        api_key_tpl = pconf.get("apiKey", "")
+        env_key = extract_env_key(api_key_tpl)
         result[pname] = {
-            "base_url": pconf.get("baseUrl", "").rstrip("/"),
-            "env_key": pdef.get("env_key", ""),
-            "proxy": pdef.get("proxy", True),
+            "base_url": base_url,
+            "env_key": env_key,
         }
     return result
 
@@ -101,13 +122,6 @@ def chat_with_provider(provider, model_id, message):
         "temperature": 0.7,
     }).encode()
     
-    # 按需设置代理
-    old_proxy = os.environ.pop("HTTPS_PROXY", None)
-    old_http_proxy = os.environ.pop("HTTP_PROXY", None)
-    if pcfg.get("proxy", True):
-        os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7890"
-        os.environ["HTTP_PROXY"] = "http://127.0.0.1:7890"
-    
     try:
         req = urllib.request.Request(url, data=body)
         req.add_header("Authorization", f"Bearer {api_key}")
@@ -123,15 +137,6 @@ def chat_with_provider(provider, model_id, message):
         return {"error": f"HTTP {e.code}: {err_body}"}
     except Exception as e:
         return {"error": str(e)[:100]}
-    finally:
-        if old_proxy is not None:
-            os.environ["HTTPS_PROXY"] = old_proxy
-        else:
-            os.environ.pop("HTTPS_PROXY", None)
-        if old_http_proxy is not None:
-            os.environ["HTTP_PROXY"] = old_http_proxy
-        else:
-            os.environ.pop("HTTP_PROXY", None)
 
 def restart_gateway():
     """通过 SIGHUP 强制 gateway 重启（立即生效，约 20s 后 Telegram 恢复）"""
@@ -155,13 +160,6 @@ def check_provider(pname, pconf):
     if not api_key:
         return {"status": "no_key", "message": "未设置 API Key", "name": pconf["name"]}
     
-    # 按需设置代理：国外走代理，国内直连
-    old_proxy = os.environ.pop("HTTPS_PROXY", None)
-    old_http_proxy = os.environ.pop("HTTP_PROXY", None)
-    if pconf.get("proxy", True):
-        os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7890"
-        os.environ["HTTP_PROXY"] = "http://127.0.0.1:7890"
-    
     start = time.time()
     try:
         req = urllib.request.Request(pconf["test_url"])
@@ -175,16 +173,6 @@ def check_provider(pname, pconf):
         return {"status": "error", "latency_ms": round(latency, 0), "http_code": e.code, "name": pconf["name"]}
     except Exception as e:
         return {"status": "timeout", "message": str(e)[:50], "name": pconf["name"]}
-    finally:
-        # 恢复代理环境变量
-        if old_proxy is not None:
-            os.environ["HTTPS_PROXY"] = old_proxy
-        else:
-            os.environ.pop("HTTPS_PROXY", None)
-        if old_http_proxy is not None:
-            os.environ["HTTP_PROXY"] = old_http_proxy
-        else:
-            os.environ.pop("HTTP_PROXY", None)
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -219,8 +207,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(self.get_panel_html().encode())
         elif path == "/api/status":
+            providers = load_providers()
             with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-                futures = {name: ex.submit(check_provider, name, cfg) for name, cfg in PROVIDERS.items()}
+                futures = {name: ex.submit(check_provider, name, cfg) for name, cfg in providers.items()}
                 status = {name: f.result(timeout=10) for name, f in futures.items()}
             self.send_json(status)
         elif path == "/api/config":
@@ -234,11 +223,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/models":
             config = load_config()
             providers = config.get("models", {}).get("providers", {})
+            provider_names = load_providers()
             result = {}
             for pname, pconf in providers.items():
                 models = pconf.get("models", [])
                 result[pname] = {
-                    "name": PROVIDERS.get(pname, {}).get("name", pname),
+                    "name": provider_names.get(pname, {}).get("name", pname),
                     "base_url": pconf.get("baseUrl", ""),
                     "model_count": len(models),
                     "models": [{"id": m.get("id"), "name": m.get("name")} for m in models],
@@ -319,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
                 old_model = config.get("agents", {}).get("defaults", {}).get("model", "")
                 config.setdefault("agents", {}).setdefault("defaults", {})["model"] = model_id
                 save_config(config)
-                # 2. 更新现有 Telegram 会话的 modelOverride
+                # 2. 更新所有面向用户的会话的 modelOverride（跳过 cron/subagent 等内部会话）
                 try:
                     sessions_path = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
                     if os.path.exists(sessions_path):
@@ -327,10 +317,11 @@ class Handler(BaseHTTPRequestHandler):
                             sessions = json.load(f)
                         changed = False
                         for key in list(sessions.keys()):
-                            if "telegram:direct:460212872" in key:
-                                sessions[key]["model"] = model_id
-                                sessions[key]["modelOverride"] = model_id
-                                sessions[key]["modelProvider"] = provider
+                            if ":cron:" in key or ":subagent:" in key or ":dreaming-" in key:
+                                continue
+                            sessions[key]["model"] = model_id
+                            sessions[key]["modelOverride"] = model_id
+                            sessions[key]["modelProvider"] = provider
                                 sessions[key]["providerOverride"] = provider
                                 if "modelOverrideSource" in sessions[key]:
                                     del sessions[key]["modelOverrideSource"]
@@ -387,7 +378,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
     
     def get_panel_html(self):
-        return open(os.path.join(os.path.dirname(__file__), "model-switch.html")).read()
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        html_path = os.path.join(script_dir, "model-switch.html")
+        return open(html_path).read()
 
 if __name__ == "__main__":
     port = 18790
