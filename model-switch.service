@@ -5,8 +5,9 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 %h/model-switch/model-switch.py
-Restart=on-failure
-RestartSec=3
+Restart=always
+RestartSec=5
+WatchdogSec=60
 
 [Install]
 WantedBy=default.target
