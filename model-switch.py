@@ -47,11 +47,13 @@ def check_auth(headers):
         del AUTH_TOKENS[token]
     return False
 
-def extract_env_key(api_key_template):
-    """从 ${ENV_KEY} 模板中提取环境变量名"""
+def resolve_api_key(api_key_template):
+    """从 apiKey 字段中获取实际的 API Key。
+    支持 ${ENV_VAR} 格式（从环境变量读取）和明文直接写入。
+    """
     s = api_key_template.strip()
     if s.startswith("${") and s.endswith("}"):
-        return s[2:-1]
+        return os.environ.get(s[2:-1], "")
     return s
 
 def load_providers():
@@ -62,9 +64,10 @@ def load_providers():
     for pname, pconf in providers_cfg.items():
         base_url = pconf.get("baseUrl", "").rstrip("/")
         api_key_tpl = pconf.get("apiKey", "")
-        env_key = extract_env_key(api_key_tpl)
+        api_key = resolve_api_key(api_key_tpl)
+        if not api_key:
+            continue  # 无 API Key 的提供商跳过
         display_name = pname
-        # 尝试从第一个模型取 name 作为显示名
         models = pconf.get("models", [])
         if models:
             display_name = models[0].get("providerName") or models[0].get("name") or pname
@@ -72,7 +75,7 @@ def load_providers():
         result[pname] = {
             "name": display_name,
             "test_url": test_url,
-            "env_key": env_key,
+            "api_key": api_key,
         }
     return result
 
@@ -88,17 +91,19 @@ def save_config(config):
         json.dump(config, f, indent=2, ensure_ascii=False)
 
 def get_provider_configs():
-    """从 openclaw.json 读取 provider 的 baseUrl 和 API key 映射"""
+    """从 openclaw.json 读取 provider 的 baseUrl 和 API Key"""
     config = load_config()
     providers = config.get("models", {}).get("providers", {})
     result = {}
     for pname, pconf in providers.items():
         base_url = pconf.get("baseUrl", "").rstrip("/")
         api_key_tpl = pconf.get("apiKey", "")
-        env_key = extract_env_key(api_key_tpl)
+        api_key = resolve_api_key(api_key_tpl)
+        if not api_key:
+            continue
         result[pname] = {
             "base_url": base_url,
-            "env_key": env_key,
+            "api_key": api_key,
         }
     return result
 
@@ -108,7 +113,7 @@ def chat_with_provider(provider, model_id, message):
     if not pcfg:
         return {"error": f"未知提供商: {provider}"}
     
-    api_key = os.environ.get(pcfg["env_key"], "")
+    api_key = pcfg.get("api_key", "")
     if not api_key:
         return {"error": f"{provider} 未设置 API Key"}
     
@@ -156,7 +161,7 @@ def restart_gateway():
         return False, str(e)
 
 def check_provider(pname, pconf):
-    api_key = os.environ.get(pconf["env_key"], "")
+    api_key = pconf.get("api_key", "")
     if not api_key:
         return {"status": "no_key", "message": "未设置 API Key", "name": pconf["name"]}
     
