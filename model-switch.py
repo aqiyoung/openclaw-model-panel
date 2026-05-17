@@ -67,10 +67,7 @@ def load_providers():
         api_key = resolve_api_key(api_key_tpl)
         if not api_key:
             continue  # 无 API Key 的提供商跳过
-        display_name = pname
-        models = pconf.get("models", [])
-        if models:
-            display_name = models[0].get("providerName") or models[0].get("name") or pname
+        display_name = pconf.get("name") or pname
         test_url = f"{base_url}/models" if "/v1" in base_url else f"{base_url}/v1/models"
         result[pname] = {
             "name": display_name,
@@ -327,12 +324,12 @@ class Handler(BaseHTTPRequestHandler):
                             sessions[key]["model"] = model_id
                             sessions[key]["modelOverride"] = model_id
                             sessions[key]["modelProvider"] = provider
-                                sessions[key]["providerOverride"] = provider
-                                if "modelOverrideSource" in sessions[key]:
-                                    del sessions[key]["modelOverrideSource"]
-                                if "providerModel" in sessions[key]:
-                                    sessions[key]["providerModel"] = model_id
-                                changed = True
+                            sessions[key]["providerOverride"] = provider
+                            if "modelOverrideSource" in sessions[key]:
+                                del sessions[key]["modelOverrideSource"]
+                            if "providerModel" in sessions[key]:
+                                sessions[key]["providerModel"] = model_id
+                            changed = True
                         if changed:
                             with open(sessions_path, "w") as f:
                                 json.dump(sessions, f, ensure_ascii=False)
