@@ -1,6 +1,14 @@
 # OpenClaw Model Switch Panel
 
-Telegram Bot （OpenClaw）模型切换面板。在网页上查看提供商连通性、切换模型、直接对话测试。
+OpenClaw 模型切换面板。在网页上查看所有模型提供商的连通性和延迟，一键切换模型——**Telegram、飞书、Discord、微信等所有平台同时生效**。
+
+## 预览
+
+- 提供商状态实时检测（延迟、可用性）
+- 模型分组展示（按提供商）
+- 一键切换模型 → 自动更新配置 + 所有平台会话 + 热重载 Gateway
+- 直接对话测试（`/api/chat`，跳过 Gateway，直连 API）
+- 密码保护 + 修改口令
 
 ## 前置条件
 
@@ -53,7 +61,7 @@ server {
 | `/api/status` | GET | 查询所有提供商连通性 |
 | `/api/config` | GET | 获取当前配置 |
 | `/api/models` | GET | 获取所有可用模型 |
-| `/api/switch` | POST | 切换模型 |
+| `/api/switch` | POST | 切换模型（所有平台同步生效） |
 | `/api/chat` | POST | 直接对话测试 |
 | `/api/reload` | POST | 重载 Gateway |
 | `/api/login` | POST | 登录获取 Token |
@@ -73,3 +81,9 @@ server {
 | `HTTP_PROXY` | 否 | 代理 |
 | `HTTPS_PROXY` | 否 | 代理 |
 | `NO_PROXY` | 否 | 直连域名 |
+
+## 工作原理
+
+1. **面板**读取 OpenClaw 配置文件（`openclaw.json`）中的 `agents.defaults.model`
+2. 切换时：**同时更新** config + 所有平台的会话（`sessions.json`）+ 发送 `SIGHUP` 给 Gateway
+3. 这样无论你通过哪个平台（Telegram / 飞书 / Discord / 微信 / WebChat）与 Bot 对话，都立即使用新模型
