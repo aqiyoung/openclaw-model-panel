@@ -211,8 +211,8 @@ async function refreshModels(){
                 <span class="check">✓</span>
             </div>`).join('');
         return `<div class="model-group">
-            <div class="model-group-title" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('show')">${m.name} (${m.model_count})</div>
-            <div class="model-list show">${items}</div>
+            <div class="model-group-title collapsed" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('show')">${m.name} (${m.model_count})</div>
+            <div class="model-list">${items}</div>
         </div>`;
     }).join('');
 }
